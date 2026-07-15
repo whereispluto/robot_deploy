@@ -12,7 +12,10 @@ import argparse
 import glob
 import os
 import sys
+from datetime import datetime
 from collections.abc import Callable
+from pathlib import Path
+from typing import TextIO
 
 from pc_32 import RobotBridge, RobotCommand, RobotState, SerialBridge
 
@@ -23,6 +26,46 @@ LINUX_PORT_PATTERNS = (
 	"/dev/ttyUSB*",       # USB-to-serial adapters
 	"/dev/serial/by-id/*",  # Stable names managed by udev
 )
+
+
+class TeeOutput:
+	"""Write output to both the terminal and a log file."""
+
+	def __init__(self, terminal: TextIO, log_file: TextIO) -> None:
+		self.terminal = terminal
+		self.log_file = log_file
+
+	def write(self, text: str) -> int:
+		self.terminal.write(text)
+		self.log_file.write(text)
+		return len(text)
+
+	def flush(self) -> None:
+		self.terminal.flush()
+		self.log_file.flush()
+
+	def isatty(self) -> bool:
+		return self.terminal.isatty()
+
+
+def run_with_log() -> int:
+	"""Run the bridge while saving stdout and stderr to a timestamped file."""
+	log_dir = Path(__file__).resolve().parent / "log"
+	log_dir.mkdir(parents=True, exist_ok=True)
+	start_time = datetime.now()
+	log_path = log_dir / f"{start_time:%Y-%m-%d_%H-%M-%S}.txt"
+
+	original_stdout = sys.stdout
+	original_stderr = sys.stderr
+	with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+		sys.stdout = TeeOutput(original_stdout, log_file)
+		sys.stderr = TeeOutput(original_stderr, log_file)
+		try:
+			print(f"Log file: {log_path}")
+			return main()
+		finally:
+			sys.stdout = original_stdout
+			sys.stderr = original_stderr
 
 
 def find_linux_serial_ports() -> list[str]:
@@ -183,4 +226,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+	raise SystemExit(run_with_log())
