@@ -314,6 +314,12 @@ class RobotBridge:
 
 			if msg_id == MSG_STATE:
 				state = unpack_state(payload)
+				print(
+					f"joint_pos={state.joint_pos} "
+					f"imu_ang_vel={state.base_ang_vel} "
+					f"imu_quat_wxyz={state.base_quat}",
+					flush=True,
+				)
 				command = self.handle_state(state)
 				self.serial_bridge.send_command(command)
 
