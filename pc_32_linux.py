@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import os
 import sys
+import time
 from datetime import datetime
 from collections.abc import Callable
 from pathlib import Path
@@ -26,6 +28,18 @@ LINUX_PORT_PATTERNS = (
 	"/dev/ttyUSB*",       # USB-to-serial adapters
 	"/dev/serial/by-id/*",  # Stable names managed by udev
 )
+
+JOINT_LIMITS_DEG = (
+	(-60.0, 60.0),    # FDCAN1 ID 1
+	(-120.0, 0.0),    # FDCAN1 ID 2
+	(-45.0, 45.0),    # FDCAN1 ID 3
+	(-60.0, 60.0),    # FDCAN2 ID 1
+	(-120.0, 0.0),    # FDCAN2 ID 2
+	(-45.0, 45.0),    # FDCAN2 ID 3
+)
+MOTION_TEST_AMPLITUDE_DEG = 2.0
+MOTION_TEST_INITIAL_HOLD_S = 2.0
+MOTION_TEST_PHASE_S = 1.5
 
 
 class TeeOutput:
@@ -115,6 +129,92 @@ def make_passthrough_policy(
 	return policy
 
 
+def make_motion_test_policy() -> Callable[[RobotState, list[float]], RobotCommand]:
+	"""Move each joint a small amount in turn, then return to its start."""
+	initial_pos: list[float] | None = None
+	test_offsets: list[float] = []
+	start_time = 0.0
+	last_phase = ""
+
+	def announce(phase: str) -> None:
+		nonlocal last_phase
+		if phase != last_phase:
+			print(f"motion_test: {phase}", flush=True)
+			last_phase = phase
+
+	def policy(state: RobotState, last_action: list[float]) -> RobotCommand:
+		nonlocal initial_pos, test_offsets, start_time
+		del last_action
+
+		if initial_pos is None:
+			if len(state.joint_pos) != len(JOINT_LIMITS_DEG):
+				raise RuntimeError("motion test requires exactly six joint positions")
+
+			initial_pos = list(state.joint_pos)
+			for index, (position, limits) in enumerate(
+				zip(initial_pos, JOINT_LIMITS_DEG), start=1
+			):
+				lower, upper = limits
+				if not math.isfinite(position):
+					raise RuntimeError(
+						f"joint {index} position is not finite: {position}"
+					)
+				if not lower <= position <= upper:
+					raise RuntimeError(
+						f"joint {index} position {position:.3f} deg is outside "
+						f"[{lower:.1f}, {upper:.1f}] deg"
+					)
+
+				if position + MOTION_TEST_AMPLITUDE_DEG <= upper:
+					test_offsets.append(MOTION_TEST_AMPLITUDE_DEG)
+				elif position - MOTION_TEST_AMPLITUDE_DEG >= lower:
+					test_offsets.append(-MOTION_TEST_AMPLITUDE_DEG)
+				else:
+					raise RuntimeError(
+						f"joint {index} has insufficient room for the motion test"
+					)
+
+			start_time = time.monotonic()
+			print(
+				"motion_test: initial joint positions="
+				f"{[round(value, 3) for value in initial_pos]}",
+				flush=True,
+			)
+
+		assert initial_pos is not None
+		target = list(initial_pos)
+		elapsed = time.monotonic() - start_time
+
+		if elapsed < MOTION_TEST_INITIAL_HOLD_S:
+			announce("holding initial positions")
+			return RobotCommand(target_joint_pos=target)
+
+		test_elapsed = elapsed - MOTION_TEST_INITIAL_HOLD_S
+		joint_period = 2.0 * MOTION_TEST_PHASE_S
+		joint_index = int(test_elapsed // joint_period)
+
+		if joint_index >= len(initial_pos):
+			announce("complete; holding initial positions (press Ctrl+C to stop)")
+			return RobotCommand(target_joint_pos=target)
+
+		phase_elapsed = test_elapsed - joint_index * joint_period
+		if phase_elapsed < MOTION_TEST_PHASE_S:
+			lower, upper = JOINT_LIMITS_DEG[joint_index]
+			target[joint_index] = max(
+				lower,
+				min(upper, initial_pos[joint_index] + test_offsets[joint_index]),
+			)
+			announce(
+				f"joint {joint_index + 1} -> {target[joint_index]:.3f} deg"
+			)
+		else:
+			announce(f"joint {joint_index + 1} returning to start")
+
+		return RobotCommand(target_joint_pos=target)
+
+	return policy
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		description="Linux PC <-> STM32 USB CDC bridge"
@@ -133,9 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	parser.add_argument(
 		"--policy",
-		choices=("passthrough", "hold"),
+		choices=("passthrough", "hold", "motion-test"),
 		default="hold",
-		help="Local policy used before model inference is connected",
+		help=(
+			"Local policy: hold, passthrough, or a sequential six-joint "
+			"2-degree motion test"
+		),
 	)
 	parser.add_argument(
 		"--target-pos",
@@ -186,11 +289,12 @@ def main() -> int:
 			)
 
 		serial_bridge = SerialBridge(port=port, baudrate=args.baudrate)
-		policy = (
-			make_passthrough_policy(args.target_pos)
-			if args.policy == "passthrough"
-			else None
-		)
+		if args.policy == "passthrough":
+			policy = make_passthrough_policy(args.target_pos)
+		elif args.policy == "motion-test":
+			policy = make_motion_test_policy()
+		else:
+			policy = None
 		print(
 			f"Connected to {port} at {args.baudrate} baud; "
 			f"loop rate {args.rate:g} Hz."
