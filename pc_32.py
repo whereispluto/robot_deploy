@@ -316,6 +316,7 @@ class RobotBridge:
 				state = unpack_state(payload)
 				print(
 					f"joint_pos={state.joint_pos} "
+					f"joint_vel={state.joint_vel} "
 					f"imu_ang_vel={state.base_ang_vel} "
 					f"imu_quat_wxyz={state.base_quat}",
 					flush=True,

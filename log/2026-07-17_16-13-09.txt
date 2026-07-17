@@ -1,0 +1,4 @@
+Log file: /home/cx/robot_deploy/log/2026-07-17_16-13-09.txt
+usage: pc_32_linux.py [-h] [--port PORT] [--baudrate BAUDRATE] [--rate RATE] [--policy {passthrough,hold,motion-test}]
+                      [--target-pos P1,P2,P3,P4,P5,P6] [--list-ports]
+pc_32_linux.py: error: argument --policy: invalid choice: 'motion-testpython' (choose from 'passthrough', 'hold', 'motion-test')

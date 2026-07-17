@@ -1,0 +1,21 @@
+Log file: /home/cx/robot_deploy/log/2026-07-17_15-57-25.txt
+usage: pc_32_linux.py [-h] [--port PORT] [--baudrate BAUDRATE] [--rate RATE]
+                      [--policy {passthrough,hold,motion-test}]
+                      [--target-pos P1,P2,P3,P4,P5,P6] [--list-ports]
+
+Linux PC <-> STM32 USB CDC bridge
+
+options:
+  -h, --help            show this help message and exit
+  --port PORT           Linux serial device (default: /dev/ttyACM0); use
+                        'auto' to select the first /dev/ttyACM*, /dev/ttyUSB*,
+                        or by-id device
+  --baudrate BAUDRATE
+  --rate RATE           Bridge loop rate in Hz
+  --policy {passthrough,hold,motion-test}
+                        Local policy: hold, passthrough, or a sequential six-
+                        joint 2-degree motion test
+  --target-pos P1,P2,P3,P4,P5,P6, --target_pos P1,P2,P3,P4,P5,P6
+                        Six joint target positions; used by the passthrough
+                        policy
+  --list-ports          List likely Linux USB serial devices and exit
