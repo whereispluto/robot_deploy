@@ -33,7 +33,20 @@
 /home/cx/anaconda3/envs/robot_deploy/bin/python \
   /home/cx/robot_deploy/pc_32_linux.py \
   --policy motion-test
+
+
+## 传入策略测试
+python pc_32_linux.py \
+  --port auto \
+  --policy onnx \
+  --command 0.15,0,0
 ```
+python pc_32_linux.py \
+  --port auto \
+  --policy onnx \
+  --model /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-20_17-02-11/2026-07-20_17-02-11.onnx \
+  --command 0.1,0,0
+
 
 测试默认行为：
 

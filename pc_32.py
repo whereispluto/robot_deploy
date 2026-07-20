@@ -47,7 +47,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 try:
 	import serial
@@ -120,6 +120,19 @@ class RobotCommand:
 	target_joint_pos: list[float]
 	seq: int = 0
 	flags: int = 0
+
+
+@dataclass
+class PolicyOutput:
+	"""Policy command plus the raw actor output used for ``last_action``.
+
+	``raw_action`` is the unscaled neural-network output.  It is deliberately
+	separate from ``RobotCommand.target_joint_pos``, which is the scaled joint
+	position sent to the STM32.
+	"""
+
+	command: RobotCommand
+	raw_action: list[float]
 
 
 class FrameError(RuntimeError):
@@ -279,7 +292,12 @@ class RobotBridge:
 	def __init__(
 		self,
 		serial_bridge: SerialBridge,
-		policy_fn: Optional[Callable[[RobotState, list[float]], RobotCommand]] = None,
+		policy_fn: Optional[
+			Callable[
+				[RobotState, list[float]],
+				Union[RobotCommand, PolicyOutput],
+			]
+		] = None,
 		command_limit: float = 100.0,
 	) -> None:
 		self.serial_bridge = serial_bridge
@@ -298,9 +316,19 @@ class RobotBridge:
 		if self.policy_fn is None:
 			command = self._default_policy(state)
 		else:
-			command = self.policy_fn(state, self.last_action)
+			policy_output = self.policy_fn(state, self.last_action)
+			if isinstance(policy_output, PolicyOutput):
+				if len(policy_output.raw_action) != 6:
+					raise RuntimeError(
+						"policy raw_action must contain exactly six values"
+					)
+				if not all(math.isfinite(value) for value in policy_output.raw_action):
+					raise RuntimeError("policy raw_action contains NaN or infinity")
+				self.last_action = list(policy_output.raw_action)
+				command = policy_output.command
+			else:
+				command = policy_output
 
-		self.last_action = list(command.target_joint_pos)
 		self._seq = (self._seq + 1) & 0xFFFF
 		command.seq = self._seq
 		return command
