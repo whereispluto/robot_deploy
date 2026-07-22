@@ -57,6 +57,9 @@ POLICY_ACTION_SIZE = 6
 POLICY_HISTORY_LENGTH = 4
 POLICY_CONTROL_PERIOD_S = 0.02
 POLICY_GAIT_CYCLE_S = 1.0
+POLICY_STARTUP_MOVE_DURATION_S = 4.0
+POLICY_STARTUP_HOLD_DURATION_S = 1.0
+POLICY_STARTUP_POSITION_TOLERANCE_DEG = 2.0
 IMU_REQUIRED_STATUS = 0x0003
 
 # Joint order is identical to the STM32 state/command frame:
@@ -180,7 +183,13 @@ def find_latest_onnx(policy_root: Path = DEFAULT_POLICY_ROOT) -> Path:
 class OnnxPolicy:
 	"""Build the 65-D mjlab actor observation and run ONNX inference."""
 
-	def __init__(self, model_path: Path, velocity_command: list[float]) -> None:
+	def __init__(
+		self,
+		model_path: Path,
+		velocity_command: list[float],
+		startup_move_duration: float = POLICY_STARTUP_MOVE_DURATION_S,
+		startup_hold_duration: float = POLICY_STARTUP_HOLD_DURATION_S,
+	) -> None:
 		try:
 			import numpy as np
 			import onnxruntime as ort
@@ -218,6 +227,11 @@ class OnnxPolicy:
 			DEFAULT_JOINT_POS_RAD, dtype=np.float32
 		)
 		self._action_scale = np.asarray(ACTION_SCALE_RAD, dtype=np.float32)
+		self._default_joint_pos_deg = np.rad2deg(self._default_joint_pos)
+		if startup_move_duration < 0.0 or startup_hold_duration < 0.0:
+			raise RuntimeError("ONNX startup durations must not be negative")
+		self._startup_move_duration = startup_move_duration
+		self._startup_hold_duration = startup_hold_duration
 		self._joint_pos_history: deque[object] = deque(
 			maxlen=POLICY_HISTORY_LENGTH
 		)
@@ -225,7 +239,10 @@ class OnnxPolicy:
 			maxlen=POLICY_HISTORY_LENGTH
 		)
 		self._step_count = 0
-		self._waiting_for_imu = False
+		self._startup_stage = "wait_imu"
+		self._startup_stage_start = 0.0
+		self._startup_joint_pos_deg = np.zeros(POLICY_ACTION_SIZE, dtype=np.float32)
+		self._wait_message_printed = False
 
 		metadata = self._session.get_modelmeta().custom_metadata_map
 		observation_names = metadata.get("observation_names", "")
@@ -253,7 +270,9 @@ class OnnxPolicy:
 			f"Loaded ONNX policy: {self.model_path}\n"
 			f"  input={self._input_name}[1,{POLICY_OBSERVATION_SIZE}] "
 			f"output={self._output_name}[1,{POLICY_ACTION_SIZE}]\n"
-			f"  velocity_command={velocity_command}",
+			f"  velocity_command={velocity_command}\n"
+			f"  startup=move {startup_move_duration:g}s + hold "
+			f"{startup_hold_duration:g}s",
 			flush=True,
 		)
 
@@ -264,33 +283,133 @@ class OnnxPolicy:
 		else:
 			history.append(value.copy())
 
-	def _hold_current_position(
-		self, state: RobotState, last_action: list[float]
-	) -> PolicyOutput:
+	def _startup_output(self, target_joint_pos: object) -> PolicyOutput:
 		return PolicyOutput(
-			command=RobotCommand(target_joint_pos=list(state.joint_pos)),
-			raw_action=list(last_action),
+			command=RobotCommand(
+				target_joint_pos=[float(value) for value in target_joint_pos]
+			),
+			raw_action=[0.0] * POLICY_ACTION_SIZE,
 		)
+
+	def _reset_policy_state(self) -> None:
+		self._joint_pos_history.clear()
+		self._joint_vel_history.clear()
+		self._step_count = 0
+
+	def _run_startup_sequence(
+		self, joint_pos_deg: object
+	) -> PolicyOutput | None:
+		"""Return a startup command, or None once actor inference may start."""
+		now = time.monotonic()
+		if self._startup_stage == "wait_imu":
+			for index, (position, limits) in enumerate(
+				zip(joint_pos_deg, JOINT_LIMITS_DEG, strict=True), start=1
+			):
+				lower, upper = limits
+				if not lower <= float(position) <= upper:
+					raise RuntimeError(
+						f"joint {index} startup position {float(position):.3f} deg "
+						f"is outside [{lower:.1f}, {upper:.1f}] deg"
+					)
+			self._startup_joint_pos_deg = joint_pos_deg.copy()
+			self._startup_stage_start = now
+			self._startup_stage = "move_to_default"
+			self._wait_message_printed = False
+			print(
+				"ONNX startup: moving from measured joint positions to "
+				f"{[round(float(value), 3) for value in self._default_joint_pos_deg]} "
+				f"deg over {self._startup_move_duration:g} s.",
+				flush=True,
+			)
+
+		if self._startup_stage == "move_to_default":
+			elapsed = now - self._startup_stage_start
+			if self._startup_move_duration > 0.0:
+				progress = min(elapsed / self._startup_move_duration, 1.0)
+			else:
+				progress = 1.0
+			smooth_progress = progress * progress * (3.0 - 2.0 * progress)
+			target_deg = self._startup_joint_pos_deg + smooth_progress * (
+				self._default_joint_pos_deg - self._startup_joint_pos_deg
+			)
+			if progress < 1.0:
+				return self._startup_output(target_deg)
+
+			self._startup_stage = "wait_for_default"
+			print(
+				"ONNX startup: move command complete; waiting for measured joints "
+				f"to enter +/-{POLICY_STARTUP_POSITION_TOLERANCE_DEG:g} deg.",
+				flush=True,
+			)
+
+		if self._startup_stage == "wait_for_default":
+			position_error = self._np.abs(
+				joint_pos_deg - self._default_joint_pos_deg
+			)
+			if self._np.max(position_error) > POLICY_STARTUP_POSITION_TOLERANCE_DEG:
+				return self._startup_output(self._default_joint_pos_deg)
+			self._startup_stage = "hold_default"
+			self._startup_stage_start = now
+			print(
+				"ONNX startup: measured joints reached the default pose; holding "
+				"before inference.",
+				flush=True,
+			)
+
+		if self._startup_stage == "hold_default":
+			position_error = self._np.abs(
+				joint_pos_deg - self._default_joint_pos_deg
+			)
+			if self._np.max(position_error) > POLICY_STARTUP_POSITION_TOLERANCE_DEG:
+				self._startup_stage = "wait_for_default"
+				return self._startup_output(self._default_joint_pos_deg)
+			if (now - self._startup_stage_start) < self._startup_hold_duration:
+				return self._startup_output(self._default_joint_pos_deg)
+			self._startup_stage = "run_policy"
+			self._reset_policy_state()
+			print(
+				"ONNX startup complete: history, last_action and gait phase reset; "
+				"actor inference started.",
+				flush=True,
+			)
+
+		if self._startup_stage != "run_policy":
+			raise RuntimeError(f"Unknown ONNX startup stage: {self._startup_stage}")
+		return None
 
 	def __call__(
 		self, state: RobotState, last_action: list[float]
 	) -> PolicyOutput:
 		np = self._np
+		joint_pos_deg = np.asarray(state.joint_pos, dtype=np.float32)
+		joint_vel_deg_s = np.asarray(state.joint_vel, dtype=np.float32)
+		if joint_pos_deg.shape != (6,) or joint_vel_deg_s.shape != (6,):
+			raise RuntimeError("Robot joint state dimensions do not match the policy")
+		if not np.isfinite(joint_pos_deg).all() or not np.isfinite(joint_vel_deg_s).all():
+			raise RuntimeError("Robot joint state contains NaN or infinity")
+
 		if (state.status & IMU_REQUIRED_STATUS) != IMU_REQUIRED_STATUS:
-			if not self._waiting_for_imu:
+			if self._startup_stage != "wait_imu":
+				print(
+					"ONNX policy lost valid IMU data; actor stopped and startup "
+					"sequence reset.",
+					flush=True,
+				)
+			self._startup_stage = "wait_imu"
+			self._reset_policy_state()
+			if not self._wait_message_printed:
 				print(
 					"ONNX policy waiting for valid gyro and quaternion; holding "
 					"the measured joint positions.",
 					flush=True,
 				)
-				self._waiting_for_imu = True
-			return self._hold_current_position(state, last_action)
-		if self._waiting_for_imu:
-			print("ONNX policy: IMU valid, inference started.", flush=True)
-			self._waiting_for_imu = False
+				self._wait_message_printed = True
+			return self._startup_output(joint_pos_deg)
 
-		joint_pos_deg = np.asarray(state.joint_pos, dtype=np.float32)
-		joint_vel_deg_s = np.asarray(state.joint_vel, dtype=np.float32)
+		startup_output = self._run_startup_sequence(joint_pos_deg)
+		if startup_output is not None:
+			return startup_output
+
 		base_ang_vel = np.asarray(state.base_ang_vel, dtype=np.float32)
 		projected_gravity = np.asarray(
 			state.gravity_orientation, dtype=np.float32
@@ -515,6 +634,20 @@ def build_parser() -> argparse.ArgumentParser:
 		),
 	)
 	parser.add_argument(
+		"--startup-move-time",
+		type=float,
+		default=POLICY_STARTUP_MOVE_DURATION_S,
+		metavar="SECONDS",
+		help="Time used to move smoothly to the ONNX default pose (default: 4)",
+	)
+	parser.add_argument(
+		"--startup-hold-time",
+		type=float,
+		default=POLICY_STARTUP_HOLD_DURATION_S,
+		metavar="SECONDS",
+		help="Default-pose hold time before ONNX inference (default: 1)",
+	)
+	parser.add_argument(
 		"--list-ports",
 		action="store_true",
 		help="List likely Linux USB serial devices and exit",
@@ -546,6 +679,8 @@ def main() -> int:
 		parser.error("--target-pos requires --policy passthrough")
 	if args.model is not None and args.policy != "onnx":
 		parser.error("--model requires --policy onnx")
+	if args.startup_move_time < 0.0 or args.startup_hold_time < 0.0:
+		parser.error("ONNX startup times must not be negative")
 
 	try:
 		if args.policy == "passthrough":
@@ -554,7 +689,12 @@ def main() -> int:
 			policy = make_motion_test_policy()
 		elif args.policy == "onnx":
 			model_path = args.model if args.model is not None else find_latest_onnx()
-			policy = OnnxPolicy(model_path, args.command)
+			policy = OnnxPolicy(
+				model_path,
+				args.command,
+				startup_move_duration=args.startup_move_time,
+				startup_hold_duration=args.startup_hold_time,
+			)
 		else:
 			policy = None
 
