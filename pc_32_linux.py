@@ -60,6 +60,7 @@ POLICY_GAIT_CYCLE_S = 1.0
 POLICY_STARTUP_MOVE_DURATION_S = 4.0
 POLICY_STARTUP_HOLD_DURATION_S = 1.0
 POLICY_STARTUP_POSITION_TOLERANCE_DEG = 2.0
+POLICY_STARTUP_LIMIT_TOLERANCE_DEG = 1.0
 IMU_REQUIRED_STATUS = 0x0003
 
 # Joint order is identical to the STM32 state/command frame:
@@ -306,10 +307,15 @@ class OnnxPolicy:
 				zip(joint_pos_deg, JOINT_LIMITS_DEG, strict=True), start=1
 			):
 				lower, upper = limits
-				if not lower <= float(position) <= upper:
+				if not (
+					lower - POLICY_STARTUP_LIMIT_TOLERANCE_DEG
+					<= float(position)
+					<= upper + POLICY_STARTUP_LIMIT_TOLERANCE_DEG
+				):
 					raise RuntimeError(
 						f"joint {index} startup position {float(position):.3f} deg "
-						f"is outside [{lower:.1f}, {upper:.1f}] deg"
+						f"is outside [{lower:.1f}, {upper:.1f}] deg plus "
+						f"{POLICY_STARTUP_LIMIT_TOLERANCE_DEG:g} deg startup tolerance"
 					)
 			self._startup_joint_pos_deg = joint_pos_deg.copy()
 			self._startup_stage_start = now
