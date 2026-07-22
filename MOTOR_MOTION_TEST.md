@@ -68,3 +68,5 @@ motion_test: joint 1 returning to start
 ```text
 /home/cx/robot_deploy/log/YYYY-MM-DD_HH-MM-SS.txt
 ```
+
+反转电机：左腿髋、右腿膝、右腿踝
