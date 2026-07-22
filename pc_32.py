@@ -64,6 +64,11 @@ MSG_STATE = 0x01
 MSG_COMMAND = 0x02
 MSG_HEARTBEAT = 0x03
 
+# Command flags shared with USB_DEVICE/App/usbd_cdc_if.h.
+# During ONNX startup, the STM32 uses the motor's built-in trapezoidal
+# position/velocity/acceleration mode instead of the policy-time PD mode.
+COMMAND_FLAG_STARTUP_TRAJECTORY = 0x0001
+
 STATE_FLOAT_COUNT = 6 + 6 + 3 + 3 + 4 + 3
 STATE_PAYLOAD_FORMAT = "<" + ("f" * STATE_FLOAT_COUNT) + "IH"
 STATE_PAYLOAD_SIZE = struct.calcsize(STATE_PAYLOAD_FORMAT)

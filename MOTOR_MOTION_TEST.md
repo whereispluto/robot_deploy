@@ -47,6 +47,14 @@ python pc_32_linux.py \
   --model /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-20_17-02-11/2026-07-20_17-02-11.onnx \
   --command 0.1,0,0
 
+cd /home/cx/robot_deploy
+
+python pc_32_mujoco.py \
+  --port auto \
+  --policy onnx \
+  --model /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-20_17-02-11/2026-07-20_17-02-11.onnx \
+  --command 0.1,0,0
+
 
 测试默认行为：
 

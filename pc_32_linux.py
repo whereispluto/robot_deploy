@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TextIO
 
 from pc_32 import (
+	COMMAND_FLAG_STARTUP_TRAJECTORY,
 	PolicyOutput,
 	RobotBridge,
 	RobotCommand,
@@ -190,6 +191,7 @@ class OnnxPolicy:
 		velocity_command: list[float],
 		startup_move_duration: float = POLICY_STARTUP_MOVE_DURATION_S,
 		startup_hold_duration: float = POLICY_STARTUP_HOLD_DURATION_S,
+		clock: Callable[[], float] = time.monotonic,
 	) -> None:
 		try:
 			import numpy as np
@@ -233,6 +235,7 @@ class OnnxPolicy:
 			raise RuntimeError("ONNX startup durations must not be negative")
 		self._startup_move_duration = startup_move_duration
 		self._startup_hold_duration = startup_hold_duration
+		self._clock = clock
 		self._joint_pos_history: deque[object] = deque(
 			maxlen=POLICY_HISTORY_LENGTH
 		)
@@ -287,7 +290,8 @@ class OnnxPolicy:
 	def _startup_output(self, target_joint_pos: object) -> PolicyOutput:
 		return PolicyOutput(
 			command=RobotCommand(
-				target_joint_pos=[float(value) for value in target_joint_pos]
+				target_joint_pos=[float(value) for value in target_joint_pos],
+				flags=COMMAND_FLAG_STARTUP_TRAJECTORY,
 			),
 			raw_action=[0.0] * POLICY_ACTION_SIZE,
 		)
@@ -301,7 +305,7 @@ class OnnxPolicy:
 		self, joint_pos_deg: object
 	) -> PolicyOutput | None:
 		"""Return a startup command, or None once actor inference may start."""
-		now = time.monotonic()
+		now = self._clock()
 		if self._startup_stage == "wait_imu":
 			for index, (position, limits) in enumerate(
 				zip(joint_pos_deg, JOINT_LIMITS_DEG, strict=True), start=1
