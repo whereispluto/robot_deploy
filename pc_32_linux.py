@@ -243,7 +243,7 @@ class OnnxPolicy:
 			maxlen=POLICY_HISTORY_LENGTH
 		)
 		self._step_count = 0
-		self._startup_stage = "wait_imu"
+		self._startup_stage = "initialize"
 		self._startup_stage_start = 0.0
 		self._startup_joint_pos_deg = np.zeros(POLICY_ACTION_SIZE, dtype=np.float32)
 		self._wait_message_printed = False
@@ -306,7 +306,7 @@ class OnnxPolicy:
 	) -> PolicyOutput | None:
 		"""Return a startup command, or None once actor inference may start."""
 		now = self._clock()
-		if self._startup_stage == "wait_imu":
+		if self._startup_stage == "initialize":
 			for index, (position, limits) in enumerate(
 				zip(joint_pos_deg, JOINT_LIMITS_DEG, strict=True), start=1
 			):
@@ -375,15 +375,10 @@ class OnnxPolicy:
 				return self._startup_output(self._default_joint_pos_deg)
 			if (now - self._startup_stage_start) < self._startup_hold_duration:
 				return self._startup_output(self._default_joint_pos_deg)
-			self._startup_stage = "run_policy"
+			self._startup_stage = "wait_for_imu"
 			self._reset_policy_state()
-			print(
-				"ONNX startup complete: history, last_action and gait phase reset; "
-				"actor inference started.",
-				flush=True,
-			)
 
-		if self._startup_stage != "run_policy":
+		if self._startup_stage not in ("wait_for_imu", "run_policy"):
 			raise RuntimeError(f"Unknown ONNX startup stage: {self._startup_stage}")
 		return None
 
@@ -398,27 +393,37 @@ class OnnxPolicy:
 		if not np.isfinite(joint_pos_deg).all() or not np.isfinite(joint_vel_deg_s).all():
 			raise RuntimeError("Robot joint state contains NaN or infinity")
 
-		if (state.status & IMU_REQUIRED_STATUS) != IMU_REQUIRED_STATUS:
-			if self._startup_stage != "wait_imu":
-				print(
-					"ONNX policy lost valid IMU data; actor stopped and startup "
-					"sequence reset.",
-					flush=True,
-				)
-			self._startup_stage = "wait_imu"
-			self._reset_policy_state()
-			if not self._wait_message_printed:
-				print(
-					"ONNX policy waiting for valid gyro and quaternion; holding "
-					"the measured joint positions.",
-					flush=True,
-				)
-				self._wait_message_printed = True
-			return self._startup_output(joint_pos_deg)
-
 		startup_output = self._run_startup_sequence(joint_pos_deg)
 		if startup_output is not None:
 			return startup_output
+
+		if (state.status & IMU_REQUIRED_STATUS) != IMU_REQUIRED_STATUS:
+			if self._startup_stage == "run_policy":
+				print(
+					"ONNX policy lost valid IMU data; actor stopped and the "
+					"default pose will be held.",
+					flush=True,
+				)
+			self._startup_stage = "wait_for_imu"
+			self._reset_policy_state()
+			if not self._wait_message_printed:
+				print(
+					"ONNX startup pose reached; waiting for valid gyro and "
+					"quaternion before actor inference.",
+					flush=True,
+				)
+				self._wait_message_printed = True
+			return self._startup_output(self._default_joint_pos_deg)
+
+		if self._startup_stage == "wait_for_imu":
+			self._startup_stage = "run_policy"
+			self._reset_policy_state()
+			self._wait_message_printed = False
+			print(
+				"ONNX startup complete: history, last_action and gait phase reset; "
+				"actor inference started.",
+				flush=True,
+			)
 
 		base_ang_vel = np.asarray(state.base_ang_vel, dtype=np.float32)
 		projected_gravity = np.asarray(

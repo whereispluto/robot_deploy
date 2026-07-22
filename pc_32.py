@@ -351,7 +351,8 @@ class RobotBridge:
 					f"joint_pos={state.joint_pos} "
 					f"joint_vel={state.joint_vel} "
 					f"imu_ang_vel={state.base_ang_vel} "
-					f"imu_quat_wxyz={state.base_quat}",
+					f"imu_quat_wxyz={state.base_quat} "
+					f"status=0x{state.status:04x}",
 					flush=True,
 				)
 				command = self.handle_state(state)
