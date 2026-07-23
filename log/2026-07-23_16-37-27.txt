@@ -1,0 +1,2 @@
+Log file: /home/cx/robot_deploy/log/2026-07-23_16-37-27.txt
+error: Serial device '/dev/ttyACM0' does not exist. Connect the STM32, use `--list-ports`, or pass `--port auto`.

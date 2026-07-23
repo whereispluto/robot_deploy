@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from pc_32_linux import (
 	OnnxPolicy,
 	POLICY_ACTION_SIZE,
 	POLICY_CONTROL_PERIOD_S,
+	TeeOutput,
 	build_parser as build_linux_parser,
 	find_latest_onnx,
 )
@@ -255,6 +257,18 @@ def make_robot_state(
 	)
 
 
+def log_robot_state(state: RobotState) -> None:
+	"""Log the policy input state using the same format as sim2real."""
+	print(
+		f"joint_pos={state.joint_pos} "
+		f"joint_vel={state.joint_vel} "
+		f"imu_ang_vel={state.base_ang_vel} "
+		f"imu_quat_wxyz={state.base_quat} "
+		f"status=0x{state.status:04x}",
+		flush=True,
+	)
+
+
 def _has_fallen(model: Any, data: Any) -> bool:
 	base_height = float(data.body("base_link").xpos[2])
 	pitch_id = model.joint("base_pitch").id
@@ -329,6 +343,7 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 			state = make_robot_state(
 				data, np, qpos_addresses, qvel_addresses, args.command
 			)
+			log_robot_state(state)
 			policy_output = policy(state, last_action)
 			last_action = policy_output.raw_action
 			target = np.deg2rad(
@@ -371,6 +386,26 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 	return 0
 
 
+def run_with_log() -> int:
+	"""Run sim2sim while saving stdout and stderr to a timestamped file."""
+	log_dir = Path(__file__).resolve().parent / "log_sim2sim"
+	log_dir.mkdir(parents=True, exist_ok=True)
+	start_time = datetime.now()
+	log_path = log_dir / f"{start_time:%Y-%m-%d_%H-%M-%S}.txt"
+
+	original_stdout = sys.stdout
+	original_stderr = sys.stderr
+	with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+		sys.stdout = TeeOutput(original_stdout, log_file)
+		sys.stderr = TeeOutput(original_stderr, log_file)
+		try:
+			print(f"Log file: {log_path}")
+			return main()
+		finally:
+			sys.stdout = original_stdout
+			sys.stderr = original_stderr
+
+
 def main() -> int:
 	parser = build_parser()
 	args = parser.parse_args()
@@ -406,4 +441,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-	raise SystemExit(main())
+	raise SystemExit(run_with_log())
