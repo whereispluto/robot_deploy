@@ -50,9 +50,10 @@ JOINT_NAMES = (
 )
 INITIAL_BASE_HEIGHT_M = 0.522
 
-# Values from custom_biped/biped_constants.py used by the training environment.
-MOTOR_KP = 25.2628551029
-MOTOR_KD = 2.0076441141
+# Radian-based gains equivalent to the M4438_30 int16 motor codes (19, 19)
+# produced when the firmware calls the FDCAN API with Kp=Kd=1.0.
+MOTOR_KP = 0.15893849236929034
+MOTOR_KD = 0.15893849236929034
 MOTOR_EFFORT_LIMIT_NM = 2.0
 MOTOR_STALL_TORQUE_NM = 10.0
 MOTOR_NO_LOAD_SPEED_RAD_S = 160.0 * 2.0 * math.pi / 60.0
