@@ -1,0 +1,7 @@
+Log file: /home/cx/robot_deploy/log_sim2sim/2026-08-02_22-58-23.txt
+usage: pc_32_mujoco.py [-h] [--port PORT] [--baudrate BAUDRATE] [--rate RATE]
+                       [--policy {passthrough,hold,motion-test,onnx}] [--target-pos P1,P2,P3,P4,P5,P6]
+                       [--model MODEL] [--command VX,VY,WZ] [--startup-move-time SECONDS]
+                       [--startup-hold-time SECONDS] [--list-ports] [--robot-xml ROBOT_XML] [--headless]
+                       [--duration SECONDS] [--no-realtime] [--reset-on-fall] [--log-interval SECONDS]
+pc_32_mujoco.py: error: unrecognized arguments:  

@@ -22,9 +22,13 @@ from pc_32 import RobotState
 from pc_32_linux import (
 	DEFAULT_JOINT_POS_RAD,
 	IMU_REQUIRED_STATUS,
+	MOTOR_POSITION_DAMPING,
+	MOTOR_POSITION_STIFFNESS,
+	MOTOR_RATED_TORQUE_NM,
 	OnnxPolicy,
 	POLICY_ACTION_SIZE,
 	POLICY_CONTROL_PERIOD_S,
+	POLICY_JOINT_NAMES,
 	TeeOutput,
 	build_parser as build_linux_parser,
 	find_latest_onnx,
@@ -40,21 +44,14 @@ DEFAULT_ROBOT_XML = (
 
 PHYSICS_TIMESTEP_S = 0.005
 PHYSICS_STEPS_PER_CONTROL = 4
-JOINT_NAMES = (
-	"left_leg_joint",
-	"left_knee_joint",
-	"left_ankle_joint",
-	"right_leg_joint",
-	"right_knee_joint",
-	"right_ankle_joint",
-)
+JOINT_NAMES = POLICY_JOINT_NAMES
 INITIAL_BASE_HEIGHT_M = 0.522
 
 # Radian-based gains equivalent to the M4438_30 int16 motor codes (19, 19)
 # produced when the firmware calls the FDCAN API with Kp=Kd=1.0.
-MOTOR_KP = 0.15893849236929034
-MOTOR_KD = 0.15893849236929034
-MOTOR_EFFORT_LIMIT_NM = 2.0
+MOTOR_KP = MOTOR_POSITION_STIFFNESS
+MOTOR_KD = MOTOR_POSITION_DAMPING
+MOTOR_EFFORT_LIMIT_NM = MOTOR_RATED_TORQUE_NM
 MOTOR_STALL_TORQUE_NM = 10.0
 MOTOR_NO_LOAD_SPEED_RAD_S = 160.0 * 2.0 * math.pi / 60.0
 
@@ -94,6 +91,10 @@ def _load_runtime() -> tuple[Any, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = build_linux_parser()
+	# The simulated robot is reset directly into the training home pose, so it can
+	# start inference immediately just like MjLab play.  The real-robot entry point
+	# retains its safe move-and-hold startup defaults.
+	parser.set_defaults(startup_move_time=0.0, startup_hold_time=0.0)
 	parser.description = (
 		"Standalone MuJoCo sim2sim runner for the six-joint ONNX policy"
 	)
@@ -160,16 +161,24 @@ def build_model(robot_xml: Path, mujoco: Any) -> Any:
 
 	spec = mujoco.MjSpec.from_file(str(robot_xml.resolve()))
 	spec.option.timestep = PHYSICS_TIMESTEP_S
+	spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+	spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON
+	spec.option.cone = mujoco.mjtCone.mjCONE_PYRAMIDAL
+	spec.option.jacobian = mujoco.mjtJacobian.mjJAC_AUTO
 	spec.option.iterations = 10
+	spec.option.tolerance = 1.0e-8
 	spec.option.ls_iterations = 20
+	spec.option.ls_tolerance = 0.01
 	spec.option.ccd_iterations = 50
 	spec.worldbody.add_geom(
 		name="terrain",
 		type=mujoco.mjtGeom.mjGEOM_PLANE,
 		pos=[0.0, 0.0, 0.0],
-		size=[0.0, 0.0, 0.05],
-		condim=4,
-		friction=[0.9, 0.2, 0.2],
+		size=[0.0, 0.0, 0.01],
+		condim=3,
+		friction=[1.0, 0.005, 0.0001],
+		solref=[0.02, 1.0],
+		solimp=[0.9, 0.95, 0.001, 0.5, 2.0],
 		rgba=[0.2, 0.3, 0.4, 1.0],
 		group=0,
 	)
@@ -183,6 +192,17 @@ def build_model(robot_xml: Path, mujoco: Any) -> Any:
 		raise RuntimeError(f"Unexpected MuJoCo timestep: {model.opt.timestep}")
 	if PHYSICS_STEPS_PER_CONTROL * model.opt.timestep != POLICY_CONTROL_PERIOD_S:
 		raise RuntimeError("Physics and ONNX policy control periods do not match")
+	expected_options = (
+		("integrator", model.opt.integrator, mujoco.mjtIntegrator.mjINT_IMPLICITFAST),
+		("solver", model.opt.solver, mujoco.mjtSolver.mjSOL_NEWTON),
+		("cone", model.opt.cone, mujoco.mjtCone.mjCONE_PYRAMIDAL),
+		("jacobian", model.opt.jacobian, mujoco.mjtJacobian.mjJAC_AUTO),
+	)
+	for option_name, actual, expected in expected_options:
+		if actual != expected:
+			raise RuntimeError(
+				f"Unexpected MuJoCo {option_name}: {actual} (expected {expected})"
+			)
 	return model
 
 

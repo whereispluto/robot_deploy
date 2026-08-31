@@ -1,0 +1,2 @@
+Log file: /home/cx/robot_deploy/log_sim2sim/2026-08-02_23-58-06.txt
+Simulation packages are unavailable in /home/cx/anaconda3/envs/robot_deploy/bin/python; restarting with /home/cx/mjlab-recovered/.venv/bin/python.

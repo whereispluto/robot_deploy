@@ -1,0 +1,17 @@
+Log file: /home/cx/robot_deploy/log_sim2sim/2026-08-02_23-12-08.txt
+Loaded ONNX policy: /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-30_23-56-50/2026-07-30_23-56-50.onnx
+  input=obs[1,65] output=actions[1,6]
+  velocity_command=[0.1, 0.0, 0.0]
+  startup=move 0s + hold 0s
+MuJoCo sim2sim started
+  robot=/home/cx/mjlab-recovered/src/mjlab/asset_zoo/robots/custom_biped/mjcf/biped.xml
+  physics=200 Hz, policy=50 Hz
+  command=[0.1, 0.0, 0.0]
+  press R in the viewer to reset; close the viewer or press Ctrl+C to stop
+joint_pos=[10.0, -20.0, 10.0, 10.0, -20.0, 10.0] joint_vel=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0] imu_ang_vel=[0.0, 0.0, 0.0] imu_quat_wxyz=[1.0, 0.0, 0.0, 0.0] status=0x0003
+ONNX startup: moving from measured joint positions to [10.0, -20.0, 10.0, 10.0, -20.0, 10.0] deg over 0 s.
+ONNX startup: move command complete; waiting for measured joints to enter +/-2 deg.
+ONNX startup: measured joints reached the default pose; holding before inference.
+ONNX startup complete: history, last_action and gait phase reset; actor inference started.
+sim t=    0.02s  x= 0.000m z= 0.521m pitch=-0.34deg action=[-0.556, 1.0, 0.427, 0.012, -0.151, 0.24]
+joint_pos=[9.461551442330046, -19.530207290768917, 9.879323630691601, 9.608783048537331, -20.1106663454661, 10.473481388972862] joint_vel=[-31.07277938910395, 2.1318684915716433, -40.56695211901183, -37.348616188704014, -5.054909219186725, 35.8878865969336] imu_ang_vel=[0.0, -0.4247236108340908, 0.0] imu_quat_wxyz=[0.9999986926426572, 0.0, -0.0016170074138538942, 0.0] status=0x0003

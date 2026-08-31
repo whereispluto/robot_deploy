@@ -18,7 +18,10 @@ from collections import deque
 from datetime import datetime
 from collections.abc import Callable
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO, cast
+
+if TYPE_CHECKING:
+	import numpy as np
 
 from pc_32 import (
 	COMMAND_FLAG_STARTUP_TRAJECTORY,
@@ -27,7 +30,6 @@ from pc_32 import (
 	RobotCommand,
 	RobotState,
 	SerialBridge,
-	clamp,
 )
 
 
@@ -41,13 +43,24 @@ LINUX_PORT_PATTERNS = (
 	"/dev/serial/by-id/*",  # Stable names managed by udev
 )
 
-JOINT_LIMITS_DEG = (
-	(-60.0, 60.0),    # FDCAN1 ID 1
-	(-120.0, 0.0),    # FDCAN1 ID 2
-	(-45.0, 45.0),    # FDCAN1 ID 3
-	(-60.0, 60.0),    # FDCAN2 ID 1
-	(-120.0, 0.0),    # FDCAN2 ID 2
-	(-45.0, 45.0),    # FDCAN2 ID 3
+POLICY_JOINT_NAMES = (
+	"left_leg_joint",
+	"left_knee_joint",
+	"left_ankle_joint",
+	"right_leg_joint",
+	"right_knee_joint",
+	"right_ankle_joint",
+)
+JOINT_LIMITS_DEG = tuple(
+	(math.degrees(lower), math.degrees(upper))
+	for lower, upper in (
+		(-1.05, 1.05),
+		(-2.09, 0.0),
+		(-0.785, 0.785),
+		(-1.05, 1.05),
+		(-2.09, 0.0),
+		(-0.785, 0.785),
+	)
 )
 MOTION_TEST_AMPLITUDE_DEG = 20.0
 MOTION_TEST_INITIAL_HOLD_S = 2.0
@@ -58,6 +71,12 @@ POLICY_ACTION_SIZE = 6
 POLICY_HISTORY_LENGTH = 4
 POLICY_CONTROL_PERIOD_S = 0.02
 POLICY_GAIT_CYCLE_S = 1.0
+POLICY_ACTION_CLIP = 1.0
+# The current MjLab planar-root entity keeps root_link_quat_w at the entity's
+# world transform, so the actor's projected_gravity observation is constant even
+# while the base_pitch joint moves.  Match the observation used to train/export
+# this policy rather than substituting the live IMU quaternion here.
+POLICY_PROJECTED_GRAVITY = (0.0, 0.0, -1.0)
 POLICY_STARTUP_MOVE_DURATION_S = 4.0
 POLICY_STARTUP_HOLD_DURATION_S = 1.0
 POLICY_STARTUP_POSITION_TOLERANCE_DEG = 2.0
@@ -69,14 +88,14 @@ IMU_REQUIRED_STATUS = 0x0003
 DEFAULT_JOINT_POS_RAD = tuple(
 	math.radians(value) for value in (10.0, -20.0, 10.0, 10.0, -20.0, 10.0)
 )
-ACTION_SCALE_RAD = (
-	0.2473661710,
-	0.3957858736,
-	0.2671554647,
-	0.2473661710,
-	0.3957858736,
-	0.2671554647,
+MOTOR_RATED_TORQUE_NM = 2.0
+MOTOR_POSITION_STIFFNESS = 0.15893849236929034
+MOTOR_POSITION_DAMPING = 0.15893849236929034
+POLICY_EFFORT_FRACTION = 0.8
+POSITION_ACTION_SCALE_RAD = (
+	POLICY_EFFORT_FRACTION * MOTOR_RATED_TORQUE_NM / MOTOR_POSITION_STIFFNESS
 )
+ACTION_SCALE_RAD = (POSITION_ACTION_SCALE_RAD,) * POLICY_ACTION_SIZE
 
 
 class TeeOutput:
@@ -236,13 +255,15 @@ class OnnxPolicy:
 		self._startup_move_duration = startup_move_duration
 		self._startup_hold_duration = startup_hold_duration
 		self._clock = clock
-		self._joint_pos_history: deque[object] = deque(
+		self._joint_pos_history: deque[np.ndarray] = deque(
 			maxlen=POLICY_HISTORY_LENGTH
 		)
-		self._joint_vel_history: deque[object] = deque(
+		self._joint_vel_history: deque[np.ndarray] = deque(
 			maxlen=POLICY_HISTORY_LENGTH
 		)
 		self._step_count = 0
+		self._last_inference_time: float | None = None
+		self._last_policy_output: PolicyOutput | None = None
 		self._startup_stage = "initialize"
 		self._startup_stage_start = 0.0
 		self._startup_joint_pos_deg = np.zeros(POLICY_ACTION_SIZE, dtype=np.float32)
@@ -258,6 +279,51 @@ class OnnxPolicy:
 			raise RuntimeError(
 				"ONNX observation order does not match this deployment code: "
 				f"{observation_names}"
+			)
+		metadata_joint_names = metadata.get("joint_names", "")
+		metadata_default_joint_pos = metadata.get("default_joint_pos", "")
+		if metadata_joint_names or metadata_default_joint_pos:
+			joint_names = metadata_joint_names.split(",")
+			exported_default = np.fromstring(
+				metadata_default_joint_pos, sep=",", dtype=np.float32
+			)
+			if len(joint_names) != exported_default.size:
+				raise RuntimeError(
+					"ONNX joint names and default positions have different lengths"
+				)
+			exported_policy_names = tuple(
+				name for name in joint_names if name in POLICY_JOINT_NAMES
+			)
+			if exported_policy_names != POLICY_JOINT_NAMES:
+				raise RuntimeError(
+					"ONNX policy joint order does not match this deployment code: "
+					f"{metadata_joint_names}"
+				)
+			try:
+				policy_joint_indices = [
+					joint_names.index(name) for name in POLICY_JOINT_NAMES
+				]
+			except ValueError as exc:
+				raise RuntimeError(
+					"ONNX joint order does not contain the deployment joints: "
+					f"{metadata_joint_names}"
+				) from exc
+			exported_policy_defaults = exported_default[policy_joint_indices]
+			if not np.allclose(
+				exported_policy_defaults,
+				self._default_joint_pos,
+				atol=5.0e-4,
+				rtol=0.0,
+			):
+				raise RuntimeError(
+					"ONNX default joint positions do not match this deployment code: "
+					f"{metadata_default_joint_pos}"
+				)
+		metadata_command_names = metadata.get("command_names", "")
+		if metadata_command_names and metadata_command_names != "twist":
+			raise RuntimeError(
+				"ONNX command configuration does not match this deployment code: "
+				f"{metadata_command_names}"
 			)
 		metadata_scale = metadata.get("action_scale", "")
 		if metadata_scale:
@@ -280,14 +346,16 @@ class OnnxPolicy:
 			flush=True,
 		)
 
-	def _append_history(self, history: deque[object], value: object) -> None:
+	def _append_history(
+		self, history: deque[np.ndarray], value: np.ndarray
+	) -> None:
 		if not history:
 			for _ in range(POLICY_HISTORY_LENGTH):
 				history.append(value.copy())
 		else:
 			history.append(value.copy())
 
-	def _startup_output(self, target_joint_pos: object) -> PolicyOutput:
+	def _startup_output(self, target_joint_pos: np.ndarray) -> PolicyOutput:
 		return PolicyOutput(
 			command=RobotCommand(
 				target_joint_pos=[float(value) for value in target_joint_pos],
@@ -300,9 +368,11 @@ class OnnxPolicy:
 		self._joint_pos_history.clear()
 		self._joint_vel_history.clear()
 		self._step_count = 0
+		self._last_inference_time = None
+		self._last_policy_output = None
 
 	def _run_startup_sequence(
-		self, joint_pos_deg: object
+		self, joint_pos_deg: np.ndarray
 	) -> PolicyOutput | None:
 		"""Return a startup command, or None once actor inference may start."""
 		now = self._clock()
@@ -425,9 +495,17 @@ class OnnxPolicy:
 				flush=True,
 			)
 
+		now = self._clock()
+		if (
+			self._last_inference_time is not None
+			and now - self._last_inference_time < POLICY_CONTROL_PERIOD_S - 1.0e-6
+		):
+			assert self._last_policy_output is not None
+			return self._last_policy_output
+
 		base_ang_vel = np.asarray(state.base_ang_vel, dtype=np.float32)
 		projected_gravity = np.asarray(
-			state.gravity_orientation, dtype=np.float32
+			POLICY_PROJECTED_GRAVITY, dtype=np.float32
 		)
 		previous_action = np.asarray(last_action, dtype=np.float32)
 		state_values = (
@@ -476,26 +554,31 @@ class OnnxPolicy:
 				f"({POLICY_OBSERVATION_SIZE},)"
 			)
 
-		raw_action = self._session.run(
+		raw_output = self._session.run(
 			[self._output_name],
 			{self._input_name: observation.reshape(1, -1)},
-		)[0][0]
+		)[0]
+		raw_action = cast("np.ndarray", raw_output)[0]
 		if raw_action.shape != (POLICY_ACTION_SIZE,) or not np.isfinite(raw_action).all():
 			raise RuntimeError("ONNX policy returned an invalid action")
+		# RslRlVecEnvWrapper clips actor outputs before the MjLab action manager.
+		raw_action = np.clip(raw_action, -POLICY_ACTION_CLIP, POLICY_ACTION_CLIP)
 
+		# MjLab deliberately leaves the scaled position target unclamped.  With the
+		# real low Kp, the large position error is how the policy requests torque;
+		# actuator effort limits and the mechanical joint limits bound the response.
 		target_rad = self._default_joint_pos + raw_action * self._action_scale
 		target_deg = np.rad2deg(target_rad)
-		clamped_target_deg = [
-			clamp(float(value), lower, upper)
-			for value, (lower, upper) in zip(
-				target_deg, JOINT_LIMITS_DEG, strict=True
-			)
-		]
 		self._step_count += 1
-		return PolicyOutput(
-			command=RobotCommand(target_joint_pos=clamped_target_deg),
+		output = PolicyOutput(
+			command=RobotCommand(
+				target_joint_pos=[float(value) for value in target_deg]
+			),
 			raw_action=[float(value) for value in raw_action],
 		)
+		self._last_inference_time = now
+		self._last_policy_output = output
+		return output
 
 
 def make_passthrough_policy(
@@ -641,11 +724,11 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--command",
 		type=parse_velocity_command,
-		default=[0.15, 0.0, 0.0],
+		default=[0.3, 0.0, 0.0],
 		metavar="VX,VY,WZ",
 		help=(
 			"Velocity command supplied to the ONNX actor in m/s,m/s,rad/s "
-			"(default: 0.15,0,0)"
+			"(default: 0.3,0,0, matching MjLab play)"
 		),
 	)
 	parser.add_argument(

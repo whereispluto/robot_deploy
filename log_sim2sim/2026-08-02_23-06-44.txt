@@ -1,0 +1,13 @@
+Log file: /home/cx/robot_deploy/log_sim2sim/2026-08-02_23-06-44.txt
+Loaded ONNX policy: /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-30_23-56-50/2026-07-30_23-56-50.onnx
+  input=obs[1,65] output=actions[1,6]
+  velocity_command=[0.1, 0.0, 0.0]
+  startup=move 4s + hold 1s
+MuJoCo sim2sim started
+  robot=/home/cx/mjlab-recovered/src/mjlab/asset_zoo/robots/custom_biped/mjcf/biped.xml
+  physics=200 Hz, policy=50 Hz
+  command=[0.1, 0.0, 0.0]
+  press R in the viewer to reset; close the viewer or press Ctrl+C to stop
+joint_pos=[10.0, -20.0, 10.0, 10.0, -20.0, 10.0] joint_vel=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0] imu_ang_vel=[0.0, 0.0, 0.0] imu_quat_wxyz=[1.0, 0.0, 0.0, 0.0] status=0x0003
+ONNX startup: moving from measured joint positions to [10.0, -20.0, 10.0, 10.0, -20.0, 10.0] deg over 4 s.
+sim t=    0.02s  x= 0.000m z= 0.521m pitch=-0.04deg action=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
