@@ -1,0 +1,8 @@
+Log file: /home/cx/robot_deploy/log_sim2real/2026-08-31_15-55-39.txt
+Loaded ONNX policy: /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-30_23-56-50/2026-07-30_23-56-50.onnx
+  input=obs[1,65] output=actions[1,6]
+  velocity_command=[0.3, 0.0, 0.0]
+  startup=move 4s + hold 1s
+Connected to /dev/ttyACM0 at 921600 baud; loop rate 200 Hz.
+joint_pos=[14.36400032043457, 42.9119987487793, 20.195999145507812, 11.484000205993652, -22.0679988861084, 20.987998962402344] joint_vel=[-0.0, 0.18000000715255737, 0.09000000357627869, 0.5400000214576721, -0.0, -0.0] imu_ang_vel=[0.0010705813765525818, 0.0005193182732909918, 6.218208000063896e-06] imu_quat_wxyz=[0.5112097859382629, -0.014576606452465057, 0.007834134623408318, -0.8592966198921204] status=0x8b03
+error: joint 2 startup position 42.912 deg is outside [-119.7, 0.0] deg plus 1 deg startup tolerance

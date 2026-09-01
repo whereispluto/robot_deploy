@@ -120,7 +120,7 @@ class TeeOutput:
 
 def run_with_log() -> int:
 	"""Run the bridge while saving stdout and stderr to a timestamped file."""
-	log_dir = Path(__file__).resolve().parent / "log"
+	log_dir = Path(__file__).resolve().parent / "log_sim2real"
 	log_dir.mkdir(parents=True, exist_ok=True)
 	start_time = datetime.now()
 	log_path = log_dir / f"{start_time:%Y-%m-%d_%H-%M-%S}.txt"

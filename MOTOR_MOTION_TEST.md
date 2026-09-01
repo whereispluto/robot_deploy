@@ -10,9 +10,12 @@
 
 | FDCAN | 电机 ID | PC 关节编号 |
 |---|---:|---:|
-| FDCAN1 / PORT1 | 2 | Joint 2 |
-| FDCAN1 / PORT1 | 3 | Joint 3 |
-| FDCAN2 / PORT2 | 1 | Joint 4 |
+| FDCAN1 / PORT1 | 1 | Joint 1（左髋） |
+| FDCAN2 / PORT2 | 2 | Joint 5（右膝） |
+| FDCAN2 / PORT2 | 3 | Joint 6（右踝） |
+
+> 该表已与当前 `motor_many.c` 和 `motor.c` 的方向映射核对。PC 测试程序
+> 始终发送逻辑角度，不应再次手动取反。
 
 ## 六关节限位
 
@@ -33,20 +36,27 @@
 /home/cx/anaconda3/envs/robot_deploy/bin/python \
   /home/cx/robot_deploy/pc_32_linux.py \
   --policy motion-test
+```
 
 
 ## 传入策略测试
+
+```bash
 python pc_32_linux.py \
   --port auto \
   --policy onnx \
   --command 0.15,0,0
 ```
+
+```bash
 python pc_32_linux.py \
   --port auto \
   --policy onnx \
   --model /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-20_17-02-11/2026-07-20_17-02-11.onnx \
   --command 0.1,0,0
+```
 
+```bash
 cd /home/cx/robot_deploy
 
 python pc_32_mujoco.py \
@@ -54,6 +64,7 @@ python pc_32_mujoco.py \
   --policy onnx \
   --model /home/cx/mjlab-recovered/logs/rsl_rl/custom_biped_velocity_nolinvel/2026-07-20_17-02-11/2026-07-20_17-02-11.onnx \
   --command 0.1,0,0
+```
 
 
 测试默认行为：
@@ -78,3 +89,59 @@ motion_test: joint 1 returning to start
 ```
 
 反转电机：左腿髋、右腿膝、右腿踝
+
+## 单关节 KP/KD 阶跃测试
+
+`single_joint_gain_test.py` 使用单独的 USB 消息 `0x04`。因此运行前必须先编译并
+烧录同时修改过的 STM32 固件 `/home/cx/robot`；旧固件不会响应此测试协议。
+
+安全措施：
+
+1. 只给指定关节发送非零 KP/KD；其他五个关节发送 `KP=KD=前馈力矩=0`。
+2. KP/KD 使用 SI 单位输入，固件乘 `2π` 转为协议的按圈增益，再经过原厂
+   `pid_adjust()` 编码。
+3. 目标位置在 PC 和 STM32 两侧均按上表限位。
+4. PC 命令持续以 50 Hz 发送；超过 100 ms 未收到新命令，STM32 自动向六个电机
+   发送零 PD。
+5. 电机反馈丢失、通信故障、速度过高或反馈力矩明显超过上限时立即停止。
+6. `Ctrl+C`、正常结束和异常退出都会重复发送六次零 PD 停止命令。
+
+第一次测试前，机器人必须悬空并可靠固定躯干；被测关节运动范围内不能有人或
+障碍物。未固定的另外五个关节没有保持力矩，必要时应做机械支撑。
+
+建议从很小的阶跃和力矩开始，例如 Joint 1：
+
+```bash
+cd /home/cx/robot_deploy
+/home/cx/anaconda3/envs/robot_deploy/bin/python \
+  single_joint_gain_test.py \
+  --port auto \
+  --joint 1 \
+  --kp 0.5 \
+  --kd 0.0 \
+  --max-torque 0.2 \
+  --step-deg 3 \
+  --cycles 2 \
+  --confirm-suspended
+```
+
+调参顺序：
+
+1. 固定 `KD=0`，从低 KP 开始。每次只增加一个档位并保存 CSV；只有在响应太慢、
+   最终误差较大且力矩没有长期饱和时才增加 KP。
+2. 出现持续振荡、明显撞击、过冲继续增大或力矩长期顶到上限时，不再增加 KP，
+   回到前一个安全值。
+3. 固定选定的 KP，从小 KD 开始增加。KD 的目标是减少振荡和过冲；如果噪声、
+   高频抖动或峰值力矩反而增加，则 KD 已过大。
+4. 低力矩下克服不了重力/静摩擦时，先改变关节姿态或增加机械支撑；确有需要再把
+   `--max-torque` 小步增加，而不是同时增大 KP、KD 和力矩上限。
+5. 六个关节分别重复。最终把日志中“量化后 SI 增益”填入 MuJoCo 执行器配置，
+   用相同阶跃比较仿真和实机，再开始重新训练。
+
+CSV 保存在 `/home/cx/robot_deploy/log_gain_test/`，包含目标角、位置、速度、误差、
+反馈力矩、状态字和运行时 KP/KD。终端同时给出上升时间、过冲、末端误差、最大
+速度和最大反馈力矩的近似值。
+
+注意：测试会监测反馈力矩是否明显超过 `--max-torque`，但如果阶跃从未触及限幅，
+只能说明“本次未观察到超限”，不能单独证明 0x90 设置的最大力矩寄存器在切换到
+0xB0 后一定保留。若要专门验证寄存器保留，需要受控的测功装置或可靠外部力矩计。

@@ -16,6 +16,7 @@ Message IDs:
 	0x01  State frame    STM32 -> PC
 	0x02  Command frame  PC -> STM32
 	0x03  Heartbeat      both directions
+	0x04  Gain test      PC -> STM32 (single-joint service mode)
 
 State payload (STM32 -> PC):
 	joint_pos[6]      float32
@@ -32,6 +33,15 @@ Command payload (PC -> STM32):
 	seq                 uint16
 	flags               uint16
 
+Gain-test payload (PC -> STM32):
+	joint_index          uint8     (zero based)
+	flags                uint8
+	reserved             uint16
+	target_position_deg  float32
+	kp_nm_per_rad        float32
+	kd_nms_per_rad       float32
+	max_torque_nm        float32
+
 Notes:
 	- last_action is kept on the PC side and inserted into the policy input.
 	- If you later want to add IMU calibration or a state estimator, do it here.
@@ -41,7 +51,6 @@ Notes:
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import math
 import struct
 import threading
@@ -63,17 +72,21 @@ VERSION = 1
 MSG_STATE = 0x01
 MSG_COMMAND = 0x02
 MSG_HEARTBEAT = 0x03
+MSG_GAIN_TEST = 0x04
 
 # Command flags shared with USB_DEVICE/App/usbd_cdc_if.h.
 # During ONNX startup, the STM32 uses the motor's built-in trapezoidal
 # position/velocity/acceleration mode instead of the policy-time PD mode.
 COMMAND_FLAG_STARTUP_TRAJECTORY = 0x0001
+GAIN_TEST_FLAG_ENABLE = 0x01
 
 STATE_FLOAT_COUNT = 6 + 6 + 3 + 3 + 4 + 3
 STATE_PAYLOAD_FORMAT = "<" + ("f" * STATE_FLOAT_COUNT) + "IH"
 STATE_PAYLOAD_SIZE = struct.calcsize(STATE_PAYLOAD_FORMAT)
 COMMAND_PAYLOAD_FORMAT = "<6fHH"
 COMMAND_PAYLOAD_SIZE = struct.calcsize(COMMAND_PAYLOAD_FORMAT)
+GAIN_TEST_PAYLOAD_FORMAT = "<BBHffff"
+GAIN_TEST_PAYLOAD_SIZE = struct.calcsize(GAIN_TEST_PAYLOAD_FORMAT)
 FRAME_HEADER_FORMAT = "<4sBBHH"
 FRAME_HEADER_SIZE = struct.calcsize(FRAME_HEADER_FORMAT)
 FRAME_CRC_SIZE = 2
@@ -125,6 +138,19 @@ class RobotCommand:
 	target_joint_pos: list[float]
 	seq: int = 0
 	flags: int = 0
+
+
+@dataclass
+class GainTestCommand:
+	"""Single-joint internal-PD test command using physical SI gains."""
+
+	joint_index: int
+	target_position_deg: float
+	kp_nm_per_rad: float
+	kd_nms_per_rad: float
+	max_torque_nm: float
+	enabled: bool = True
+	seq: int = 0
 
 
 @dataclass
@@ -235,6 +261,39 @@ def unpack_command(payload: bytes) -> RobotCommand:
 	return RobotCommand(target_joint_pos=target_joint_pos, seq=seq, flags=flags)
 
 
+def pack_gain_test_command(command: GainTestCommand) -> bytes:
+	flags = GAIN_TEST_FLAG_ENABLE if command.enabled else 0
+	payload = struct.pack(
+		GAIN_TEST_PAYLOAD_FORMAT,
+		int(command.joint_index) & 0xFF,
+		flags,
+		0,
+		float(command.target_position_deg),
+		float(command.kp_nm_per_rad),
+		float(command.kd_nms_per_rad),
+		float(command.max_torque_nm),
+	)
+	return pack_frame(MSG_GAIN_TEST, payload, command.seq)
+
+
+def unpack_gain_test_command(payload: bytes, seq: int = 0) -> GainTestCommand:
+	if len(payload) != GAIN_TEST_PAYLOAD_SIZE:
+		raise FrameError("gain-test payload size mismatch")
+
+	joint_index, flags, _, target, kp, kd, max_torque = struct.unpack(
+		GAIN_TEST_PAYLOAD_FORMAT, payload
+	)
+	return GainTestCommand(
+		joint_index=joint_index,
+		target_position_deg=target,
+		kp_nm_per_rad=kp,
+		kd_nms_per_rad=kd,
+		max_torque_nm=max_torque,
+		enabled=(flags & GAIN_TEST_FLAG_ENABLE) != 0,
+		seq=seq,
+	)
+
+
 class SerialBridge:
 	def __init__(
 		self,
@@ -264,6 +323,9 @@ class SerialBridge:
 
 	def send_command(self, command: RobotCommand) -> None:
 		self.send(pack_command(command))
+
+	def send_gain_test_command(self, command: GainTestCommand) -> None:
+		self.send(pack_gain_test_command(command))
 
 	def read_frames(self) -> list[bytes]:
 		frames: list[bytes] = []
