@@ -109,7 +109,7 @@ motion_test: joint 1 returning to start
 第一次测试前，机器人必须悬空并可靠固定躯干；被测关节运动范围内不能有人或
 障碍物。未固定的另外五个关节没有保持力矩，必要时应做机械支撑。
 
-建议从很小的阶跃和力矩开始，例如 Joint 1：
+建议从很小的阶跃和力矩开始，例如 Joint 3：
 
 ```bash
 cd /home/cx/robot_deploy
@@ -145,3 +145,38 @@ CSV 保存在 `/home/cx/robot_deploy/log_gain_test/`，包含目标角、位置�
 注意：测试会监测反馈力矩是否明显超过 `--max-torque`，但如果阶跃从未触及限幅，
 只能说明“本次未观察到超限”，不能单独证明 0x90 设置的最大力矩寄存器在切换到
 0xB0 后一定保留。若要专门验证寄存器保留，需要受控的测功装置或可靠外部力矩计。
+
+## 单关节 KP/KD 正弦测试
+
+`single_joint_sine_gain_test.py` 复用上述 `0x04` 服务协议、关节逻辑方向、限位和
+故障保护。程序先保持启动位置，然后平滑增加正弦幅值，采集若干个满幅周期，最后
+平滑减幅并回到启动位置。每次运行只测试一组 KP/KD，避免无人确认时自动切换到
+更激进的增益。
+
+从低频、小幅值和小力矩开始，例如 Joint 1：
+
+```bash
+cd /home/cx/robot_deploy
+uv run --python /home/cx/anaconda3/envs/robot_deploy/bin/python \
+  single_joint_sine_gain_test.py \
+  --port auto \
+  --joint 1 \
+  --kp 0.5 \
+  --kd 0.0 \
+  --max-torque 0.2 \
+  --amplitude-deg 3 \
+  --frequency-hz 0.5 \
+  --cycles 6 \
+  --confirm-suspended
+```
+
+默认在正弦前后各使用一个周期平滑增幅/减幅。`--cycles` 只计算中间满幅段的周期
+数；可用 `--ramp-cycles` 修改过渡周期数。目标角在运行前按对应关节的上下限检查，
+并检查正弦目标的理论峰值速度低于 `--abort-velocity`。
+
+CSV 保存在 `log_sine_gain_test/`，文件名含关节、频率、KP 和 KD。终端会给出
+稳定段的跟踪 RMSE、最大误差、幅值比、相位滞后、最大速度和最大反馈力矩。比较
+增益时应对
+同一关节保持姿态、幅值、频率、力矩上限和周期数一致；先固定 KD 逐步选择 KP，
+再固定 KP 逐步增加 KD。每次修改增益前都应检查上一组波形和力矩，并重新人工确认
+测试环境安全。
