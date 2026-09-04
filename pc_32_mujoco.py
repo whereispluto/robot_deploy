@@ -47,8 +47,9 @@ PHYSICS_STEPS_PER_CONTROL = 4
 JOINT_NAMES = POLICY_JOINT_NAMES
 INITIAL_BASE_HEIGHT_M = 0.522
 
-# Radian-based gains equivalent to the M4438_30 int16 motor codes (19, 19)
-# produced when the firmware calls the FDCAN API with Kp=Kd=1.0.
+# Match the current MjLab gains and action mapping imported from pc_32_linux.py.
+# The gains use the HTDW-4438-30 reflected rotor inertia with a 10 Hz natural
+# frequency and a 2.0 damping ratio.
 MOTOR_KP = MOTOR_POSITION_STIFFNESS
 MOTOR_KD = MOTOR_POSITION_DAMPING
 MOTOR_EFFORT_LIMIT_NM = MOTOR_RATED_TORQUE_NM

@@ -89,8 +89,10 @@ DEFAULT_JOINT_POS_RAD = tuple(
 	math.radians(value) for value in (10.0, -20.0, 10.0, 10.0, -20.0, 10.0)
 )
 MOTOR_RATED_TORQUE_NM = 2.0
-MOTOR_POSITION_STIFFNESS = 0.15893849236929034
-MOTOR_POSITION_DAMPING = 0.15893849236929034
+# Match the MjLab actuator gains derived from a 10 Hz natural frequency, a 2.0
+# damping ratio, and the HTDW-4438-30 reflected rotor inertia.
+MOTOR_POSITION_STIFFNESS = 32.50976628567147
+MOTOR_POSITION_DAMPING = 2.069636001251
 POLICY_EFFORT_FRACTION = 0.8
 POSITION_ACTION_SCALE_RAD = (
 	POLICY_EFFORT_FRACTION * MOTOR_RATED_TORQUE_NM / MOTOR_POSITION_STIFFNESS
@@ -564,9 +566,9 @@ class OnnxPolicy:
 		# RslRlVecEnvWrapper clips actor outputs before the MjLab action manager.
 		raw_action = np.clip(raw_action, -POLICY_ACTION_CLIP, POLICY_ACTION_CLIP)
 
-		# MjLab deliberately leaves the scaled position target unclamped.  With the
-		# real low Kp, the large position error is how the policy requests torque;
-		# actuator effort limits and the mechanical joint limits bound the response.
+		# MjLab deliberately leaves the scaled position target unclamped.  The action
+		# scale maps a unit action to 80% of rated torque through the proportional
+		# term; actuator effort limits and mechanical joint limits bound the response.
 		target_rad = self._default_joint_pos + raw_action * self._action_scale
 		target_deg = np.rad2deg(target_rad)
 		self._step_count += 1
