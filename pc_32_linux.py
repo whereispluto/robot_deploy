@@ -89,15 +89,20 @@ DEFAULT_JOINT_POS_RAD = tuple(
 	math.radians(value) for value in (10.0, -20.0, 10.0, 10.0, -20.0, 10.0)
 )
 MOTOR_RATED_TORQUE_NM = 2.0
-# Match the MjLab actuator gains derived from a 10 Hz natural frequency, a 2.0
+# Match the training actuator gains derived from a 5 Hz natural frequency, a 1.0
 # damping ratio, and the HTDW-4438-30 reflected rotor inertia.
-MOTOR_POSITION_STIFFNESS = 32.50976628567147
-MOTOR_POSITION_DAMPING = 2.069636001251
-POLICY_EFFORT_FRACTION = 0.8
-POSITION_ACTION_SCALE_RAD = (
-	POLICY_EFFORT_FRACTION * MOTOR_RATED_TORQUE_NM / MOTOR_POSITION_STIFFNESS
+MOTOR_POSITION_STIFFNESS = 8.127441571417867
+MOTOR_POSITION_DAMPING = 0.517409000312686
+# Joint-position target scales used by the training environment and embedded in
+# the exported ONNX metadata: left hip, knee, ankle, then right hip, knee, ankle.
+ACTION_SCALE_RAD = (
+	0.18,
+	0.35,
+	0.25,
+	0.18,
+	0.35,
+	0.25,
 )
-ACTION_SCALE_RAD = (POSITION_ACTION_SCALE_RAD,) * POLICY_ACTION_SIZE
 
 
 class TeeOutput:

@@ -1,0 +1,2 @@
+Log file: /home/cx/robot_deploy/log_sim2real/2026-09-09_15-30-41.txt
+error: ONNX action scale does not match this deployment code: 0.180,0.350,0.250,0.180,0.350,0.250
