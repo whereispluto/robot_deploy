@@ -25,15 +25,17 @@ from pc_32_linux import (
 	MOTOR_POSITION_DAMPING,
 	MOTOR_POSITION_STIFFNESS,
 	MOTOR_RATED_TORQUE_NM,
-	OnnxPolicy,
 	POLICY_ACTION_SIZE,
 	POLICY_CONTROL_PERIOD_S,
 	POLICY_JOINT_NAMES,
+	OnnxPolicy,
+	PolicyCsvTrace,
 	TeeOutput,
-	build_parser as build_linux_parser,
 	find_latest_onnx,
 )
-
+from pc_32_linux import (
+	build_parser as build_linux_parser,
+)
 
 DEFAULT_MJLAB_ROOT = Path("/home/cx/mjlab-recovered")
 DEFAULT_MUJOCO_PYTHON = DEFAULT_MJLAB_ROOT / ".venv" / "bin" / "python"
@@ -48,8 +50,8 @@ JOINT_NAMES = POLICY_JOINT_NAMES
 INITIAL_BASE_HEIGHT_M = 0.522
 
 # Match the current MjLab gains and action mapping imported from pc_32_linux.py.
-# The gains use the HTDW-4438-30 reflected rotor inertia with a 10 Hz natural
-# frequency and a 2.0 damping ratio.
+# The gains use the HTDW-4438-30 reflected rotor inertia with a 5 Hz natural
+# frequency and a 1.0 damping ratio.
 MOTOR_KP = MOTOR_POSITION_STIFFNESS
 MOTOR_KD = MOTOR_POSITION_DAMPING
 MOTOR_EFFORT_LIMIT_NM = MOTOR_RATED_TORQUE_NM
@@ -317,6 +319,12 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 	policy = new_policy()
 	last_action = [0.0] * POLICY_ACTION_SIZE
 	target = np.asarray(DEFAULT_JOINT_POS_RAD, dtype=np.float64)
+	trace_dir = Path(__file__).resolve().parent / "log_sim2sim"
+	trace_dir.mkdir(parents=True, exist_ok=True)
+	trace_path = trace_dir / f"{datetime.now():%Y-%m-%d_%H-%M-%S}_policy.csv"
+	trace = PolicyCsvTrace(trace_path)
+	command_seq = 0
+	print(f"Policy CSV: {trace_path}", flush=True)
 	reset_requested = threading.Event()
 
 	def key_callback(keycode: int) -> None:
@@ -358,6 +366,7 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 				policy = new_policy()
 				last_action = [0.0] * POLICY_ACTION_SIZE
 				target = np.asarray(DEFAULT_JOINT_POS_RAD, dtype=np.float64)
+				command_seq = 0
 				next_wall_tick = time.perf_counter()
 				next_log_time = 0.0
 				print("Simulation reset.", flush=True)
@@ -368,6 +377,14 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 			log_robot_state(state)
 			policy_output = policy(state, last_action)
 			last_action = policy_output.raw_action
+			command_seq = (command_seq + 1) & 0xFFFF
+			policy_output.command.seq = command_seq
+			trace(
+				time.perf_counter_ns(),
+				state,
+				policy_output.command,
+				policy_output,
+			)
 			target = np.deg2rad(
 				np.asarray(policy_output.command.target_joint_pos, dtype=np.float64)
 			)
@@ -403,6 +420,7 @@ def run_simulation(args: argparse.Namespace, np: Any, mujoco: Any) -> int:
 	except KeyboardInterrupt:
 		pass
 	finally:
+		trace.close()
 		if viewer is not None:
 			viewer.close()
 	return 0
